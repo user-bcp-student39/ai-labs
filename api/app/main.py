@@ -12,6 +12,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from .authorization import authorize_owner
 from .repositories import create_task_record, list_summary_records, list_task_records
 from .security import verified_identity
+from .upload_storage import (
+    InvalidUploadError,
+    UploadAlreadyExistsError,
+    UploadTooLargeError,
+    store_upload,
+)
 
 
 def create_app(db_path: str | None = None, upload_dir: str | None = None) -> FastAPI:
@@ -91,10 +97,20 @@ def create_app(db_path: str | None = None, upload_dir: str | None = None) -> Fas
 
     @app.post("/api/requirements", status_code=201)
     async def upload_requirement(file: UploadFile = File(...), identity: dict[str, str] = Depends(verified_identity)) -> dict[str, Any]:
-        target = Path(selected_uploads) / str(file.filename)
-        content = await file.read()
-        target.write_bytes(content)
-        return {"owner": identity["username"], "fileName": file.filename, "storedAt": str(target), "size": len(content)}
+        try:
+            stored_upload = await store_upload(file, Path(selected_uploads))
+        except InvalidUploadError as error:
+            raise HTTPException(status_code=400, detail="Invalid upload") from error
+        except UploadTooLargeError as error:
+            raise HTTPException(status_code=413, detail="Upload exceeds the maximum size") from error
+        except UploadAlreadyExistsError as error:
+            raise HTTPException(status_code=409, detail="File already exists") from error
+        return {
+            "owner": identity["username"],
+            "fileName": stored_upload.file_name,
+            "storedAt": stored_upload.stored_at,
+            "size": stored_upload.size,
+        }
 
     @app.get("/api/backend-health")
     def backend_health(identity: dict[str, str] = Depends(verified_identity)) -> dict[str, Any]:

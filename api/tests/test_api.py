@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from app import main as api_main
 from app import security
+from app import upload_storage
 from app.main import create_app
 
 
@@ -187,14 +188,123 @@ def test_returns_summary_for_seeded_tasks(tmp_path: Path) -> None:
 def test_uploads_requirement(tmp_path: Path) -> None:
     upload_dir = tmp_path / "uploads"
     app = create_app(str(tmp_path / "workshop.db"), str(upload_dir))
+    file_content = b"Login must be accessible"
     with TestClient(app) as client:
         response = client.post(
             "/api/requirements",
             headers=headers(),
-            files={"file": ("requirements.txt", b"Login must be accessible", "text/plain")},
+            files={"file": ("requirements.txt", file_content, "text/plain")},
         )
     assert response.status_code == 201
-    assert (upload_dir / "requirements.txt").exists()
+    assert response.json() == {
+        "owner": "student",
+        "fileName": "requirements.txt",
+        "storedAt": "requirements.txt",
+        "size": len(file_content),
+    }
+    assert (upload_dir / "requirements.txt").read_bytes() == file_content
+
+
+@pytest.mark.parametrize("filename", ["../outside.txt", r"..\nested\outside.txt", r"C:\incoming\outside.txt"])
+def test_normalizes_upload_filename_without_writing_outside_upload_dir(tmp_path: Path, filename: str) -> None:
+    upload_dir = tmp_path / "uploads"
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_bytes(b"Preserve existing file")
+    app = create_app(str(tmp_path / "workshop.db"), str(upload_dir))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/requirements",
+            headers=headers(),
+            files={"file": (filename, b"Safe content", "text/plain")},
+        )
+
+    assert response.status_code == 201
+    assert response.json()["fileName"] == "outside.txt"
+    assert response.json()["storedAt"] == "outside.txt"
+    assert (upload_dir / "outside.txt").read_bytes() == b"Safe content"
+    assert outside_file.read_bytes() == b"Preserve existing file"
+
+
+@pytest.mark.parametrize("filename", ["requirements.txt", "notes.md", "data.json", "UPPER.TXT"])
+def test_accepts_allowed_upload_extensions(tmp_path: Path, filename: str) -> None:
+    upload_dir = tmp_path / "uploads"
+    app = create_app(str(tmp_path / "workshop.db"), str(upload_dir))
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/requirements",
+            headers=headers(),
+            files={"file": (filename, b"Allowed content", "application/octet-stream")},
+        )
+
+    assert response.status_code == 201
+    assert (upload_dir / filename).read_bytes() == b"Allowed content"
+
+
+def test_rejects_disallowed_upload_extension(tmp_path: Path) -> None:
+    upload_dir = tmp_path / "uploads"
+    app = create_app(str(tmp_path / "workshop.db"), str(upload_dir))
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/requirements",
+            headers=headers(),
+            files={"file": ("requirements.csv", b"Not allowed", "text/csv")},
+        )
+
+    assert response.status_code == 400
+    assert list(upload_dir.iterdir()) == []
+
+
+def test_accepts_upload_at_maximum_size(tmp_path: Path) -> None:
+    upload_dir = tmp_path / "uploads"
+    content = b"x" * (5 * 1024 * 1024)
+    app = create_app(str(tmp_path / "workshop.db"), str(upload_dir))
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/requirements",
+            headers=headers(),
+            files={"file": ("maximum.txt", content, "text/plain")},
+        )
+
+    assert response.status_code == 201
+    assert response.json()["size"] == len(content)
+    assert (upload_dir / "maximum.txt").stat().st_size == len(content)
+
+
+def test_rejects_upload_over_maximum_size_without_leaving_partial_file(tmp_path: Path) -> None:
+    upload_dir = tmp_path / "uploads"
+    content = b"x" * (5 * 1024 * 1024 + 1)
+    app = create_app(str(tmp_path / "workshop.db"), str(upload_dir))
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/requirements",
+            headers=headers(),
+            files={"file": ("oversized.txt", content, "text/plain")},
+        )
+
+    assert response.status_code == 413
+    assert list(upload_dir.iterdir()) == []
+
+
+def test_rejects_duplicate_upload_name_without_overwriting_existing_file(tmp_path: Path) -> None:
+    upload_dir = tmp_path / "uploads"
+    app = create_app(str(tmp_path / "workshop.db"), str(upload_dir))
+    with TestClient(app) as client:
+        original = client.post(
+            "/api/requirements",
+            headers=headers(),
+            files={"file": ("duplicate.txt", b"Original", "text/plain")},
+        )
+        duplicate = client.post(
+            "/api/requirements",
+            headers=headers(),
+            files={"file": ("duplicate.txt", b"Replacement", "text/plain")},
+        )
+
+    assert original.status_code == 201
+    assert duplicate.status_code == 409
+    assert (upload_dir / "duplicate.txt").read_bytes() == b"Original"
+    assert list(upload_dir.glob(".upload-*.tmp")) == []
 
 
 def test_rejects_expired_legacy_token(tmp_path: Path) -> None:
@@ -528,14 +638,28 @@ def test_upload_requires_file_part(tmp_path: Path) -> None:
 
 
 def test_returns_500_when_file_write_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    original_write_bytes = Path.write_bytes
+    class FailingTemporaryFile:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+            self.path.touch()
 
-    def fail_upload_write(path: Path, content: bytes) -> int:
-        if path.name == "requirements.txt":
+        @property
+        def name(self) -> str:
+            return str(self.path)
+
+        def __enter__(self) -> "FailingTemporaryFile":
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def write(self, _content: bytes) -> int:
             raise OSError("fictional local write failure")
-        return original_write_bytes(path, content)
 
-    monkeypatch.setattr(Path, "write_bytes", fail_upload_write)
+    def fail_temporary_file(*, dir: Path, **_: object) -> FailingTemporaryFile:
+        return FailingTemporaryFile(dir / ".upload-failure.tmp")
+
+    monkeypatch.setattr(upload_storage, "NamedTemporaryFile", fail_temporary_file)
     app = create_app(str(tmp_path / "workshop.db"), str(tmp_path / "uploads"))
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.post(
@@ -545,6 +669,7 @@ def test_returns_500_when_file_write_fails(tmp_path: Path, monkeypatch: pytest.M
         )
     assert response.status_code == 500
     assert response.text == "Internal Server Error"
+    assert list((tmp_path / "uploads").iterdir()) == []
 
 
 @pytest.mark.parametrize("endpoint", SQL_ENDPOINT_NAMES)
