@@ -33,8 +33,14 @@ contacta servicios remotos.
 | `GET /api/summary` | Emisor/configuración ausente (`test_every_endpoint_returns_503_when_jwt_configuration_is_missing`) | Error, H-API-01 | 503 `Token verification is not configured`. |
 | `GET /api/summary` | JWKS no disponible (`test_every_endpoint_returns_503_when_jwks_is_unavailable`) | Error, H-API-01 | 503 `Token verification is unavailable`. |
 | `GET /api/summary` | SQLite falla (`test_task_endpoints_return_500_for_sqlite_errors`) | Error | 500 `Internal Server Error`. |
-| `POST /api/requirements` | Carga de archivo ficticio válida (`test_uploads_requirement`) | Camino feliz, H-API-04 | 201 con owner, nombre, ruta y tamaño; archivo guardado en `tmp_path`. |
+| `POST /api/requirements` | Carga de archivo ficticio válida (`test_uploads_requirement`) | Camino feliz, H-API-04 | 201 con owner, nombre normalizado, ubicación relativa y tamaño; contenido guardado en `tmp_path`. |
 | `POST /api/requirements` | Archivo de cero bytes (`test_uploads_empty_file`) | Borde, H-API-04 | 201, tamaño 0 y archivo vacío almacenado. |
+| `POST /api/requirements` | Nombre con ruta POSIX o Windows (`test_normalizes_upload_filename_without_writing_outside_upload_dir`) | Seguridad, H-API-04 | 201 con nombre base; no escribe ni sobrescribe archivos fuera del directorio de cargas. |
+| `POST /api/requirements` | Extensiones `.txt`, `.md`, `.json` (`test_accepts_allowed_upload_extensions`) | Camino feliz, H-API-04 | 201; acepta mayúsculas en la extensión. |
+| `POST /api/requirements` | Extensión no permitida (`test_rejects_disallowed_upload_extension`) | Error, H-API-04 | 400; no crea archivo. |
+| `POST /api/requirements` | Archivo de 5 MiB (`test_accepts_upload_at_maximum_size`) | Borde, H-API-04 | 201; tamaño almacenado igual al límite. |
+| `POST /api/requirements` | Archivo mayor de 5 MiB (`test_rejects_upload_over_maximum_size_without_leaving_partial_file`) | Error, H-API-04 | 413; no deja archivo parcial. |
+| `POST /api/requirements` | Nombre ya existente (`test_rejects_duplicate_upload_name_without_overwriting_existing_file`) | Error, H-API-04 | 409; preserva el archivo original y limpia temporales. |
 | `POST /api/requirements` | Falta la parte `file` (`test_upload_requires_file_part`) | Error | 422 con `loc` igual a `["body","file"]`. |
 | `POST /api/requirements` | Sin header / JWT inválido (`test_every_endpoint_rejects_missing_or_invalid_authentication`) | Error, H-API-01 | 401 `{"detail":"Invalid token"}`. |
 | `POST /api/requirements` | Emisor/configuración ausente (`test_every_endpoint_returns_503_when_jwt_configuration_is_missing`) | Error, H-API-01 | 503 `Token verification is not configured`. |
@@ -422,21 +428,22 @@ JSON auxiliar de cobertura se eliminaron al finalizar.
 
 | Ejecución | Comando | Código de salida | Resultado |
 |---|---|---:|---|
-| Suite API y cobertura (2026-10-26) | `.\.venv\Scripts\python.exe -m pytest tests/test_api.py -q --cov=app --cov-report=term-missing --cov-report=json:<archivo-temporal>\coverage.json` | 0 | **54 passed**; sin fallos. El comando usa `.venv` y datos temporales. |
+| Suite API y cobertura (baseline, 2026-10-27) | `python tools/lab.py test api` | 0 | **54 passed**; cobertura total **93.91%** antes de los cambios de H-API-04. |
+| Suite API y cobertura (post-cambio, 2026-10-27) | `python tools/lab.py test api` | 0 | **65 passed**; cobertura total **93.89%**, superior al gate de 85%. |
 | Cálculo de numeradores/denominadores (2026-10-26) | `.\.venv\Scripts\python.exe -m coverage json -o <archivo-temporal>.json` | 0 | JSON de cobertura generado, leído para calcular líneas y ramas cubiertas; archivo temporal eliminado. |
 
 La configuración de `api/pyproject.toml` activa branch coverage y limita el
 source a `app`. Por tanto, la cobertura de `tests/test_api.py` no se incluye
-como código fuente medido. En este cambio no se modificó código de producción;
-los módulos de aplicación ejecutados por la suite superan el 85%:
+como código fuente medido. En el resultado post-cambio, los módulos de
+aplicación ejecutados por la suite superan el 85%:
 
 | Alcance | Numerador / denominador | Método | Resultado |
 |---|---:|---|---:|
-| `app/main.py` | 94 / 97 unidades (83/83 sentencias + 11/14 ramas) | Coverage.py, sentencias y ramas | 96.9% |
-| `app/repositories.py` | 12 / 14 unidades (11/12 sentencias + 1/2 ramas) | Coverage.py, sentencias y ramas | 85.7% |
-| `app/security.py` | 71 / 79 unidades (64/69 sentencias + 7/10 ramas) | Coverage.py, sentencias y ramas | 89.9% |
-| `app/authorization.py` | 7 / 7 unidades (5/5 sentencias + 2/2 ramas) | Coverage.py, sentencias y ramas | 100% |
-| **Global `app/`** | **184 / 197 unidades (163/169 sentencias + 21/28 ramas)** | **Coverage.py, branch coverage** | **93.4% (93% redondeado en pytest)** |
+| `app/main.py` | 89 sentencias, 14 ramas | Coverage.py, sentencias y ramas | 98% |
+| `app/upload_storage.py` | 49 sentencias, 10 ramas | Coverage.py, sentencias y ramas | 93% |
+| `app/repositories.py` | 12 sentencias, 2 ramas | Coverage.py, sentencias y ramas | 86% |
+| `app/security.py` | 69 sentencias, 10 ramas | Coverage.py, sentencias y ramas | 90% |
+| **Global `app/`** | **224 sentencias, 38 ramas** | **Coverage.py, branch coverage** | **93.89%** |
 
 La suite emitió advertencias deprecadas existentes de `FastAPI.on_event` y
 Starlette; no impidieron la ejecución.
@@ -445,17 +452,14 @@ Starlette; no impidieron la ejecución.
 
 ### Fallos de ejecución
 
-Ninguno: las 54 pruebas terminaron correctamente con código de salida 0.
+Ninguno: las 65 pruebas post-cambio terminaron correctamente con código de salida 0.
 
 ### Hallazgos y pendientes
 
-- **H-API-04 continúa siendo un defecto pendiente, no una expectativa que se
-  haya convertido en un test de éxito.** `api/app/main.py:94-96` usa el nombre
-  recibido para construir la ruta, lee todo el archivo y no aplica límite de
-  tamaño ni filtro de extensión. Los casos de nombre sin extensión y tamaño
-  máximo no se fijan como aprobados/rechazados porque `docs/ENDPOINTS.md` y
-  `PLAN.md` no contienen una política acordada. El test de archivo vacío cubre
-  el borde de cero bytes, no demuestra que exista un límite.
+- **H-API-04 implementado localmente; pendiente de revisión e integración.**
+  La carga normaliza el nombre, permite `.txt`, `.md` y `.json`, limita a 5 MiB,
+  rechaza colisiones y devuelve `storedAt` relativo. Las pruebas nuevas cubren
+  traversal, extensiones, ambos lados del límite y colisiones.
 - El valor exacto del emisor/JWKS desplegado no se probó; todos los JWT y JWKS
   de la suite son ficticios y locales.
 - La cobertura no alcanza todas las ramas posibles de `security.py` ni la rama
@@ -464,10 +468,9 @@ Ninguno: las 54 pruebas terminaron correctamente con código de salida 0.
 
 ### Pruebas propuestas, no ejecutadas
 
-Después de acordar en H-API-04 la lista de extensiones y el límite en bytes,
-agregar pruebas para extensión no permitida, nombre que intente salir del
-directorio, tamaño exactamente en el límite y tamaño límite + 1. No se asigna
-un valor de límite ni una lista provisional de extensiones.
+No quedan pendientes las pruebas de H-API-04 incluidas en esta entrega.
+Continúa como riesgo fuera del alcance la limitación del cuerpo HTTP antes del
+procesamiento multipart en la infraestructura de despliegue.
 
 ## Documentos consultados
 
