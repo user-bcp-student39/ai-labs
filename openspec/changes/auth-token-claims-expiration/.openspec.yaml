@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-28
+goal: Specify observable token and login behavior without deciding signing
+  architecture
