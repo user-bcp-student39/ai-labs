@@ -472,6 +472,47 @@ No quedan pendientes las pruebas de H-API-04 incluidas en esta entrega.
 Continúa como riesgo fuera del alcance la limitación del cuerpo HTTP antes del
 procesamiento multipart en la infraestructura de despliegue.
 
+## Auth — caracterización previa (auth-token-claims-expiration)
+
+**Componente:** auth. **Comando:** `python tools/lab.py test auth` (raíz).
+**Resultado:** código 0, `Tests run: 5, Failures: 0, Errors: 0` en
+`AuthResourceTest`, `BUILD SUCCESS`. No se midió cobertura en esta fase.
+
+| Prueba (`AuthResourceTest`) | Comportamiento protegido | Resultado |
+|---|---|---|
+| `logsInWithWorkshopUser` | Login válido responde 200 con `user.username` y `token`. | Pasa. |
+| `successfulLoginKeepsResponseContract` | Login válido mantiene `token`, `expiresIn` 3600 y `user.displayName`/`user.role`. | Pasa. |
+| `invalidCredentialsReturnUnauthorizedWithoutToken` | Credenciales inválidas responden 401 sin `token`. | Pasa. |
+| `missingUsernameReturnsBadRequest` | Username ausente responde 400 sin `token`. | Pasa. |
+| `missingPasswordReturnsBadRequest` | Password ausente responde 400 sin `token`. | Pasa. |
+
+Estas pruebas no fijan el contenido del token actual (Base64 con secreto fijo).
+Esa parte se reemplazará por JWT RS256 en la tarea 3.
+
+### Auth — implementación RS256 (tareas 2.1, 2.2, 3.1–3.4)
+
+**Comando:** `python tools/lab.py test auth` (raíz). **Resultado:** código 0,
+`Tests run: 14, Failures: 0, Errors: 0` (`AuthResourceTest` 10, `TokenIssuerTest` 4),
+`BUILD SUCCESS`.
+
+| Prueba | Requisito protegido |
+|---|---|
+| `missingClientReturnsBadRequestWithoutToken`, `blankClientReturnsBadRequestWithoutToken` | Client ausente o en blanco: 400 sin token. |
+| `clientClaimIsTrimmedAndBoundToToken` | Claim `client` igual al valor recortado; `sub` y `role` correctos. |
+| `issuesRs256TokenWithRequiredClaims` | Firma RS256 verificable con clave de prueba; `sub`, `client`, `role`, `iss`, `aud`. |
+| `tokenExpiresOneHourAfterIssuance` | `iat` y `exp` derivados del reloj fijo; vigencia de 3600 s. |
+| `refusesToIssueWithoutSigningKey`, `refusesToIssueWithoutIssuer` | Sin clave o issuer configurados no se emite token. |
+| `expiresInMatchesTokenExpiryWithinOneSecond` | `abs(expiresIn - (exp - now)) <= 1` con reloj real. |
+| `loginOutputDoesNotExposeTokenOrKeyMaterial` | Salida capturada sin token ni clave privada (ver limitación). |
+
+**Cobertura del código modificado (JaCoCo, `auth/target/site/jacoco/jacoco.csv`):**
+`AuthResource`, `AuthenticationService`, `TokenIssuer` y `TokenIssuerProducer`:
+líneas **90.77%**, ramas **80.77%**.
+
+**Limitaciones:** la clave de `src/test/resources/jwt/` es de prueba y no se usa fuera de `%test`.
+La prueba de logs captura `System.out`/`System.err`; no garantiza que el logger de Quarkus escriba ahí.
+La expiración en `exp` se exige al consumidor API y no se verifica desde `auth/`.
+
 ## Documentos consultados
 
 `README.md`, `RETO.md`, `docs/GOOD_PRACTICES.md`, `docs/ENDPOINTS.md`,
