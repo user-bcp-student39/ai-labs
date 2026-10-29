@@ -15,7 +15,7 @@
 ## 3. Implementar emisión y flujo de autenticación
 
 - [x] 3.1 Incorporar la extensión Quarkus SmallRye JWT Build y la configuración de firma RS256, issuer y audience sin valores secretos por defecto; verificar que la configuración de auth compila y que no contiene material de firma incluido en el repositorio.
-- [x] 3.2 Implementar un servicio de token con duración nominal de una hora, `Clock` inyectable y claims compatibles con la spec; verificar firma, claims y expiración con las pruebas de token de 2.2 y 2.3.
+- [x] 3.2 Implementar un servicio de token con duración nominal de una hora, `Clock` inyectable y claims compatibles con la spec; verificar firma, claims y duración con las pruebas de token de 2.2 (la verificación de expiración de 2.3 sigue pendiente).
 - [x] 3.3 Validar el client no vacío en el límite del login, recortarlo y delegar la autenticación y creación del token a servicios enfocados, manteniendo el endpoint y la respuesta exitosa actuales; verificar los casos de login y client de 1.1, 1.2 y 2.1.
 - [x] 3.4 Exigir `AUTH_TOKEN_SECRET` y los valores de issuer/audience requeridos fuera del laboratorio, documentar su configuración y mantener las claves de prueba aisladas; verificar que la configuración ausente impide emitir tokens y que las pruebas usan solo material de prueba.
 - [ ] 3.5 Asegurar que el flujo de login no registra tokens ni secretos; verificar con las pruebas de logs de 2.4 para solicitudes válidas e inválidas.
