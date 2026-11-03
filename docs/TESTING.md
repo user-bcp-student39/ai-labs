@@ -54,6 +54,7 @@ Todas se hicieron con el entorno del componente, `api/.venv`, pytest 9.0.2 y Pyt
 | E1 | api/ | `.venv\Scripts\python.exe -m pytest tests -v -rxX -p no:cacheprovider --cov=app --cov-report=term-missing` | 0 | 44 passed, 5 xfailed | api; H-API-01, H-API-02, H-API-03, H-API-04, H-API-07, H-API-10 |
 | E2 | api/ | `.venv\Scripts\python.exe -m pytest tests/test_endpoints.py --runxfail -k "other_owner or ignores_owner or oversized or escape"` | 1 | 5 failed por aserción | api; H-API-02, H-API-04 |
 | E3 | raíz (ai-labs) | `python tools/lab.py test api` | 0 | 44 passed, 5 xfailed; cobertura 100%; umbral 85% cumplido | api; H-API-01 a H-API-04 |
+| E4 | raíz (ai-labs) | `python tools/lab.py test api` (tras H-API-13) | 0 | 79 passed, 5 xfailed; cobertura 100% (165 sentencias, 30 ramas); umbral 85% cumplido | api; H-API-13 |
 
 E2 confirma que cada XFAIL falla por la aserción y no por una excepción no relacionada. En el caso de `../escape.txt`, el archivo sí aparece fuera de uploads/.
 

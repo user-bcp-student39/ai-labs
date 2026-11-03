@@ -40,8 +40,48 @@ Cobertura actual: api/tests/test_api.py tiene cuatro casos (listado, creación y
 | H-API-10 | api | Excepciones amplias que ocultan la causa | Bug | legacy_identity captura Exception y convierte cualquier fallo en 401. backend_health captura Exception y responde HTTP 200 con status 0; un cliente que ignore el campo status toma el fallo como éxito. | api/app/main.py:25; api/app/main.py:120-121 | baja | Pendiente |
 | H-API-11 | api | Conexión SQLite compartida entre hilos sin sincronización | Bug | La conexión se crea con check_same_thread=False y la usan rutas síncronas que FastAPI ejecuta en un pool de hilos. Sin lock, escrituras concurrentes pueden fallar o intercalarse. No reproducido. | api/app/main.py:35; api/app/main.py:46 | baja | Pendiente |
 | H-API-12 | api | CORS con origen comodín y credenciales habilitadas | Vulnerabilidad | allow_origins=["*"] junto con allow_credentials=True permite a cualquier origen llamar a la API desde el navegador. El riesgo real depende de si se usan cookies; hoy el token viaja en el encabezado. | api/app/main.py:48-54 | baja | Pendiente |
+| H-API-13 | api | Sin validación de title, status, priority ni longitudes en POST /api/tasks | Bug | El cuerpo se acepta como dict libre y cada campo se convierte con str(); admite título vacío, estados o prioridades arbitrarios y textos sin tope. | api/app/main.py:79-84; api/app/main.py:99-102 | media | Implementado en rama local day1/prompting (api/app/task_validation.py); pendiente de revisión humana, PR local en PR_H-API-13.md |
+| H-API-14 | api | Imagen Docker ejecuta como root y escucha en 0.0.0.0 | Vulnerabilidad | El Dockerfile no define USER; uvicorn corre como root y escribe en /data y /uploads. Un fallo de subida (H-API-04) tendría más alcance. | api/Dockerfile:1-9; compose.yaml:13-15 | media | CANDIDATO |
+| H-API-15 | api | create_app() se ejecuta al importar el módulo (efectos en disco) | Refactor | `app = create_app()` abre SQLite, crea directorios y siembra datos en la importación, con rutas relativas al directorio actual. Importar app.main desde otro cwd crea data/ y uploads/ allí. | api/app/main.py:32-35; api/app/main.py:128 | baja | CANDIDATO |
+| H-API-16 | api | Ciclo de vida: on_event deprecado y PoolManager nuevo por petición | Refactor | on_event("shutdown") está deprecado en FastAPI (aviso en pytest) y backend_health crea un urllib3.PoolManager por llamada sin reutilizar ni cerrar. | api/app/main.py:116; api/app/main.py:121 | baja | CANDIDATO |
 
 Todos los hallazgos de RETO.md para api aparecen en el código; ninguno queda como "No encontrado". H-API-05 está presente en requirements, pero su condición de CVE queda por verificar.
+
+## Candidatos de discovery adicionales (api)
+
+Estado de todos: CANDIDATO, pendientes de revisión humana. No se modificó código ni se crearon issues. Línea base: `python tools/lab.py test api` → 44 passed, 5 xfailed, cobertura 100 %. Nota: las líneas citadas en las filas H-API-01 a H-API-12 corresponden a una versión anterior de api/app/main.py (por ejemplo, la secuencia de SQL ya está en api/app/repository.py); no se modificaron.
+
+### H-API-13 — Sin validación de title, status, priority ni longitudes en POST /api/tasks
+- Estado: Implementado en rama local day1/prompting; pendiente de revisión humana (el texto de evidencia describe el estado antes del cambio). Decisiones aplicadas: status/priority estrictos en mayúsculas, title obligatorio y no vacío, 400 con manejador propio, validación manual en api/app/task_validation.py.
+- Evidencia (estado previo al cambio): api/app/main.py:79-84 (`str(payload.get(...))` sin validar); api/app/main.py:99-102 (el resumen compara exactamente "HIGH", "DONE", "ARCHIVED"); docs/ENDPOINTS.md:107-108 ("Sin validación de valores") y :304 (pregunta abierta); api/tests/test_endpoints.py:142 (payload vacío se acepta con valores por defecto).
+- Impacto: una tarea con priority "high" o status "Done" no se cuenta correctamente en highPriorityOpen; títulos vacíos o muy largos se almacenan; datos inconsistentes llegan al frontend.
+- Prioridad propuesta: media.
+- Contrato potencialmente afectado: POST /api/tasks (nuevo 422 o 400 para valores inválidos) y GET /api/summary. Requiere decidir los valores válidos (pregunta abierta en docs/ENDPOINTS.md:304) y confirmar con web.
+- Cómo validarlo: POST /api/tasks con `{"title":"","priority":"high","status":"x"}` y comprobar que devuelve 201; luego GET /api/summary y observar que highPriorityOpen no cuenta la tarea. Añadir pruebas de caracterización antes de cambiar.
+
+### H-API-14 — Imagen Docker ejecuta como root
+- Estado: CANDIDATO
+- Evidencia: api/Dockerfile:1-9 (sin instrucción USER; `mkdir -p /data /uploads`; CMD uvicorn en 0.0.0.0:8000); compose.yaml:13-15 (volúmenes api-data y api-uploads escribibles); el puerto se publica solo en 127.0.0.1:8000 (compose.yaml:17).
+- Impacto: un compromiso del proceso (p. ej. mediante la subida de archivos de H-API-04) obtiene privilegios de root dentro del contenedor y acceso de escritura a datos y subidas. La exposición del puerto está acotada a localhost.
+- Prioridad propuesta: media.
+- Contrato potencialmente afectado: ninguno de API; afecta a Dockerfile, permisos de los volúmenes /data y /uploads y compose.yaml.
+- Cómo validarlo: `docker compose build api` y `docker compose run --rm api id` (esperado hoy: uid=0). Tras el cambio, comprobar que el usuario no root puede escribir en /data y /uploads y que las pruebas de subida y persistencia siguen en verde.
+
+### H-API-15 — create_app() se ejecuta al importar el módulo
+- Estado: CANDIDATO
+- Evidencia: api/app/main.py:128 (`app = create_app()`); api/app/main.py:32-35 (rutas por defecto "./data/workshop.db" y "./uploads", creación de directorios); api/app/main.py:36-45 (conexión y siembra durante create_app).
+- Impacto: importar app.main (pruebas, herramientas, análisis estático) crea base de datos y carpetas según el directorio actual; dificulta aislar pruebas y cambiar configuración (relacionado con H-API-06 y H-API-08).
+- Prioridad propuesta: baja.
+- Contrato potencialmente afectado: el punto de entrada `app.main:app` usado por api/Dockerfile:9 debe mantenerse.
+- Cómo validarlo: desde un directorio temporal, `python -c "import sys; sys.path.insert(0,'<ruta>/api'); import app.main"` y comprobar que se crean ./data y ./uploads. Tras el cambio, confirmar que importar no crea archivos y que `uvicorn app.main:app` sigue arrancando.
+
+### H-API-16 — on_event deprecado y PoolManager por petición
+- Estado: CANDIDATO
+- Evidencia: api/app/main.py:116 (`urllib3.PoolManager()` en cada llamada a backend-health); api/app/main.py:121 (`@app.on_event("shutdown")`); salida de `python tools/lab.py test api`: DeprecationWarning "on_event is deprecated, use lifespan event handlers" (101 avisos).
+- Impacto: se pierde la reutilización de conexiones y se acumulan pools sin cerrar bajo carga; el hook de cierre dejará de funcionar si se elimina la API deprecada en una actualización de FastAPI.
+- Prioridad propuesta: baja.
+- Contrato potencialmente afectado: GET /api/backend-health no debe cambiar su respuesta (requestedBy, status, body); el cierre de la conexión SQLite debe conservarse.
+- Cómo validarlo: `python tools/lab.py test api` (comprobar que desaparece el aviso) y las pruebas de backend-health en api/tests/test_endpoints.py:243-252 siguen pasando; revisar que la conexión se cierra al apagar.
 
 ## Pendientes y dependencias
 

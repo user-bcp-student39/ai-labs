@@ -29,6 +29,7 @@ Si el token falta, está mal formado, expiró o el secreto no coincide, la respu
 | Código | Cuándo ocurre | Cuerpo observado |
 |---|---|---|
 | 401 | Falta el encabezado, el token está mal formado, expiró o el secreto no coincide. | `{"detail":"Invalid token: invalid token"}` cuando el token está vacío, expirado o con secreto distinto. `{"detail":"Invalid token: Incorrect padding"}` cuando la cadena Base64 es inválida. El texto después de `Invalid token:` proviene de la excepción interna y puede cambiar (H-API-07). |
+| 400 | Solo en POST /api/tasks: `title`, `description`, `status` o `priority` inválidos (H-API-13). | `{"detail":[{"field":"title","message":"must be a non-empty string"}]}` |
 | 422 | Falta el cuerpo o un campo obligatorio. Lo genera FastAPI, no el código de la aplicación. | `{"detail":[{"type":"missing","loc":["body"],"msg":"Field required","input":null}]}` |
 
 ## 1. GET /api/tasks
@@ -67,9 +68,9 @@ Cuerpo: arreglo de tareas, ordenado por `id` ascendente.
 | id | integer | Identificador autoincremental. |
 | title | string | Título de la tarea. |
 | description | string | Descripción. Puede ser cadena vacía. |
-| status | string | Estado. El código no restringe los valores; los sembrados son TODO e IN_PROGRESS. |
+| status | string | Estado. Los valores nuevos se limitan a TODO, IN_PROGRESS, DONE y ARCHIVED (H-API-13); filas antiguas pueden tener otros. |
 | owner | string | Usuario propietario. |
-| priority | string | Prioridad. El código no restringe los valores; los sembrados son HIGH, MEDIUM y LOW. |
+| priority | string | Prioridad. Los valores nuevos se limitan a HIGH, MEDIUM y LOW (H-API-13); filas antiguas pueden tener otros. |
 | createdAt | string | Fecha y hora generadas por SQLite con `datetime('now')`, formato `YYYY-MM-DD HH:MM:SS`. Pendiente confirmar la zona horaria (pregunta abierta 4). |
 
 Ejemplo real (usuario student, con datos sembrados):
@@ -94,7 +95,7 @@ Ejemplo con `owner=trainer`: devuelve 200 con la tarea `{"id":3,"title":"Trainer
 
 ## 2. POST /api/tasks
 
-1. **Qué hace:** crea una tarea. Si no se envían status, priority u owner, usa los valores por defecto.
+1. **Qué hace:** crea una tarea. `title` es obligatorio; si no se envían description, status, priority u owner, usa los valores por defecto.
 2. **Autenticación:** sí. Encabezado `Authorization: Bearer <TOKEN>`.
 3. **Request**
 
@@ -102,10 +103,10 @@ Cuerpo JSON (`Content-Type: application/json`):
 
 | Campo | Tipo | Obligatorio | Descripción |
 |---|---|---|---|
-| title | string | No (por defecto `""`) | Título. El código lo convierte con `str()` (api/app/main.py:80). |
-| description | string | No (por defecto `""`) | Descripción. |
-| status | string | No (por defecto `TODO`) | Estado. Sin validación de valores. |
-| priority | string | No (por defecto `MEDIUM`) | Prioridad. Sin validación de valores. |
+| title | string | Sí | Título. Texto no vacío (no solo espacios), máximo 200 caracteres (api/app/task_validation.py). |
+| description | string | No (por defecto `""`) | Descripción. Debe ser texto, máximo 2000 caracteres. |
+| status | string | No (por defecto `TODO`) | Uno de `TODO`, `IN_PROGRESS`, `DONE`, `ARCHIVED`, en mayúsculas exactas. |
+| priority | string | No (por defecto `MEDIUM`) | Uno de `HIGH`, `MEDIUM`, `LOW`, en mayúsculas exactas. |
 | owner | string | No (por defecto identidad del token) | Propietario. Actualmente se acepta del cuerpo sin validar (H-API-02). |
 
 Ejemplo real:
@@ -138,13 +139,19 @@ Ejemplo real con solo `{"title":"Solo titulo"}`:
 5. **Errores posibles**
 
 - 401: ver errores comunes.
+- 400 cuando `title`, `description`, `status` o `priority` no cumplen las reglas de la tabla (H-API-13). No se crea ninguna tarea. El cuerpo lista todos los campos inválidos y no devuelve el valor recibido:
+
+```json
+{"detail":[{"field":"title","message":"must be a non-empty string"},{"field":"status","message":"must be one of: ARCHIVED, DONE, IN_PROGRESS, TODO"}]}
+```
+
 - 422 cuando no hay cuerpo. Ejemplo: `{"detail":[{"type":"missing","loc":["body"],"msg":"Field required","input":null}]}`.
-- Otros cuerpos mal formados (por ejemplo, JSON inválido o campos de tipo distinto) no se comprobaron en esta documentación. Pregunta abierta 1.
+- Un cuerpo que no es un objeto JSON (por ejemplo una lista) o con JSON inválido sigue siendo rechazado con 422 por FastAPI (verificado en ejecución).
 
 6. **Notas de seguridad**
 
 - Con `{"owner":"trainer"}` en el cuerpo, la tarea se crea con owner trainer y la respuesta es 201 (verificado). Corresponde a H-API-02, Aprobado y sin corregir.
-- Como `str()` se aplica a los campos, un `null` en `title` se guardaría como la cadena `"None"`. Derivado del código en api/app/main.py:80; no comprobado en ejecución (pregunta abierta 1).
+- Antes de H-API-13, `str()` convertía un `null` en `"None"`. Ahora los tipos incorrectos se rechazan con 400.
 
 ## 3. GET /api/summary
 
@@ -297,11 +304,12 @@ Ejemplo real con el servicio inalcanzable. El texto del error depende del sistem
 | H-API-07 | Detalle interno en 401 y en backend-health. | Pendiente |
 | H-API-10 | backend-health responde 200 ante fallos. | Pendiente |
 | H-API-12 | CORS con origen `*` y credenciales habilitadas (api/app/main.py:52-53). | Pendiente |
+| H-API-13 | Validación de title, status, priority y longitudes en POST /api/tasks. | Resuelto en el código local; pendiente de revisión humana |
 
 ## Preguntas abiertas
 
-1. ¿Qué se espera cuando el cuerpo de POST /api/tasks tiene tipos distintos o nulos (por ejemplo, `title: null`, que hoy se convertiría en `"None"`)?
-2. ¿Qué valores válidos tienen `status` y `priority`? El código no los valida.
+1. ~~Tipos distintos o nulos en POST /api/tasks.~~ Cerrada por H-API-13: se rechazan con 400.
+2. ~~Valores válidos de `status` y `priority`.~~ Cerrada por H-API-13: ver tabla de POST /api/tasks. Pendiente confirmar con web que no envía minúsculas.
 3. ¿Un usuario con rol trainer puede consultar tareas de otros owners? El código no tiene regla de rol.
 4. ¿`createdAt` debe mostrarse en UTC? SQLite `datetime('now')` devuelve UTC y el código no lo indica.
 5. ¿El campo `status` de backend-health debe devolver un código de error (por ejemplo, 503) en lugar de 200 con 0? Cambiaría el contrato observado.
