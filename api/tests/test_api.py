@@ -56,3 +56,32 @@ def test_rejects_invalid_token(tmp_path: Path) -> None:
     with TestClient(app) as client:
         response = client.get("/api/tasks", headers={"Authorization": "Bearer invalid"})
     assert response.status_code == 401
+
+
+# H-API-03 caracterizacion: un titulo normal se guarda y se lee.
+def test_characterizes_normal_title_round_trip(tmp_path: Path) -> None:
+    app = create_app(str(tmp_path / "workshop.db"), str(tmp_path / "uploads"))
+    with TestClient(app) as client:
+        created = client.post("/api/tasks", headers=headers(), json={"title": "Titulo normal", "description": "d"})
+        listed = client.get("/api/tasks", headers=headers())
+    assert created.status_code == 201
+    assert listed.json()[-1]["title"] == "Titulo normal"
+
+
+# H-API-03 correccion (fallaria hoy): el titulo con comilla se guarda literal.
+def test_stores_single_quote_title_literally(tmp_path: Path) -> None:
+    app = create_app(str(tmp_path / "workshop.db"), str(tmp_path / "uploads"))
+    with TestClient(app) as client:
+        created = client.post("/api/tasks", headers=headers(), json={"title": "O'Brien", "description": "d"})
+        listed = client.get("/api/tasks", headers=headers())
+    assert created.status_code == 201
+    assert listed.json()[-1]["title"] == "O'Brien"
+
+
+# H-API-03 correccion (fallaria hoy): una comilla en owner no altera el filtro.
+def test_quote_in_owner_query_does_not_alter_filter(tmp_path: Path) -> None:
+    app = create_app(str(tmp_path / "workshop.db"), str(tmp_path / "uploads"))
+    with TestClient(app) as client:
+        response = client.get("/api/tasks", params={"owner": "x' OR '1'='1"}, headers=headers())
+    assert response.status_code == 200
+    assert response.json() == []
