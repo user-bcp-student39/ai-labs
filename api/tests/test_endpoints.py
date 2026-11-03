@@ -139,12 +139,12 @@ def test_create_with_full_body_returns_201(client: TestClient) -> None:
     )
 
 
-def test_create_with_empty_payload_applies_defaults(client: TestClient) -> None:
-    response = client.post("/api/tasks", headers=auth(), json={})
+def test_create_with_title_only_applies_defaults(client: TestClient) -> None:
+    response = client.post("/api/tasks", headers=auth(), json={"title": "Solo titulo"})
     body = response.json()
     assert response.status_code == 201
     assert (body["title"], body["description"], body["status"], body["priority"], body["owner"]) == (
-        "",
+        "Solo titulo",
         "",
         "TODO",
         "MEDIUM",

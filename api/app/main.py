@@ -10,8 +10,11 @@ from typing import Any
 import urllib3
 from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.requests import Request
+from fastapi.responses import JSONResponse
 
 from app import repository
+from app.task_validation import TaskValidationError, validate_task_payload
 
 LEGACY_SECRET = "WORKSHOP_SECRET_2026"
 
@@ -55,6 +58,10 @@ def create_app(db_path: str | None = None, upload_dir: str | None = None) -> Fas
         allow_headers=["*"],
     )
 
+    @app.exception_handler(TaskValidationError)
+    def handle_task_validation_error(request: Request, error: TaskValidationError) -> JSONResponse:
+        return JSONResponse(status_code=400, content={"detail": error.errors})
+
     def as_task(row: sqlite3.Row) -> dict[str, Any]:
         return {
             "id": row["id"],
@@ -77,12 +84,11 @@ def create_app(db_path: str | None = None, upload_dir: str | None = None) -> Fas
 
     @app.post("/api/tasks", status_code=201)
     def create_task(payload: dict[str, Any] = Body(...), identity: dict[str, str] = Depends(legacy_identity)) -> dict[str, Any]:
-        title = str(payload.get("title", ""))
-        description = str(payload.get("description", ""))
-        status = str(payload.get("status", "TODO"))
-        priority = str(payload.get("priority", "MEDIUM"))
+        validated = validate_task_payload(payload)
         owner = str(payload.get("owner", identity["username"]))
-        task_id = repository.insert_task(connection, title, description, status, owner, priority)
+        task_id = repository.insert_task(
+            connection, validated.title, validated.description, validated.status, owner, validated.priority
+        )
         return as_task(repository.find_task_by_id(connection, task_id))
 
     @app.get("/api/summary")
