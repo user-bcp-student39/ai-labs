@@ -1,0 +1,48 @@
+{
+  "case_id": "caso-03",
+  "service": "tarjetas",
+  "error_code": "DUPLICATE_DEBIT_SUSPECTED",
+  "correlation_id": "PAY-DEMO-301",
+  "first_seen": "2026-11-03T16:00:03Z",
+  "last_seen": "2026-11-03T16:00:03Z",
+  "occurrences": 1,
+  "priority": "P1",
+  "summary": "Alerta de posible débito duplicado: dos DEBIT_RECORDED de 80.00 PEN (MOV-DEMO-01 y MOV-DEMO-02) para un solo PAYMENT_ACCEPTED (evt-301).",
+  "impact": "Operación PAY-DEMO-301 del servicio tarjetas: dos movimientos distintos de 80.00 PEN, MOV-DEMO-01 (evt-302) y MOV-DEMO-02 (evt-303), asociados a un único pago aceptado. Requiere conciliación; el log no confirma un cobro doble al cliente.",
+  "evidence": [
+    {
+      "file": "caso-03-cargos.log",
+      "line": 1,
+      "text": "2026-11-03T11:00:00-05:00 INFO service=tarjetas correlation_id=PAY-DEMO-301 event_id=evt-301 code=PAYMENT_ACCEPTED amount=80.00 currency=PEN card=[REDACTADO]"
+    },
+    {
+      "file": "caso-03-cargos.log",
+      "line": 2,
+      "text": "2026-11-03T11:00:01-05:00 INFO service=tarjetas correlation_id=PAY-DEMO-301 event_id=evt-302 code=DEBIT_RECORDED movement_id=MOV-DEMO-01 amount=80.00 currency=PEN"
+    },
+    {
+      "file": "caso-03-cargos.log",
+      "line": 3,
+      "text": "2026-11-03T11:00:02-05:00 INFO service=tarjetas correlation_id=PAY-DEMO-301 event_id=evt-303 code=DEBIT_RECORDED movement_id=MOV-DEMO-02 amount=80.00 currency=PEN"
+    },
+    {
+      "file": "caso-03-cargos.log",
+      "line": 4,
+      "text": "2026-11-03T11:00:03-05:00 ERROR service=tarjetas correlation_id=PAY-DEMO-301 event_id=evt-304 code=DUPLICATE_DEBIT_SUSPECTED movement_ids=MOV-DEMO-01,MOV-DEMO-02 card=[REDACTADO]"
+    },
+    {
+      "file": "caso-03-cargos.log",
+      "line": 6,
+      "text": "2026-11-03T11:00:04-05:00 WARN service=tarjetas correlation_id=PAY-DEMO-301 event_id=evt-305 code=RECONCILIATION_PENDING message=\"No hay resultado de conciliacion disponible\""
+    }
+  ],
+  "missing_data": [
+    "Resultado de conciliación: evt-305 RECONCILIATION_PENDING indica que no hay resultado disponible (línea 6).",
+    "Cuál movimiento es el cobro válido del pago evt-301 y cuál, si alguno, es excedente.",
+    "Si MOV-DEMO-02 es un cargo real distinto o un duplicado de registro del mismo débito.",
+    "Estado de publicación o liquidación de MOV-DEMO-01 y MOV-DEMO-02 (el log solo muestra DEBIT_RECORDED).",
+    "Causa del segundo registro de débito: el log no la indica.",
+    "La línea 5 es copia exacta de evt-304 (línea 4) y se cuenta como un solo evento; no es un segundo error."
+  ],
+  "recommended_action": "Que operaciones concilie PAY-DEMO-301 comparando MOV-DEMO-01 y MOV-DEMO-02 con el pago evt-301 y decida con esa evidencia; no ejecutar devoluciones, bloqueos ni cambios de sistemas sin esa revisión."
+}
